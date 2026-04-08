@@ -217,7 +217,8 @@ let STATE={
     // FIX 1: group constraint state
     constraintType:'together',constraintP1:'',constraintP2:'',constraintNote:'',
     constraintGroupSelected:[],constraintGroupNote:'',
-    constraintMode:'pair',   // 'pair' | 'group'
+    constraintMode:'pair',   // 'pair' | 'group' | 'position'
+    constraintPositionPlayer:'',constraintPosition:'last', // 'first' | 'last'
     competitionType:'individual_winners_free',
     selectedWinners:[],        // session-only — not persisted
     selectedWinningGroup:'',   // session-only — not persisted
@@ -1043,10 +1044,13 @@ function renderConstraints(){
   const together=constraints.filter(c=>c.type==='together');
   const apart=constraints.filter(c=>c.type==='apart');
   const group=constraints.filter(c=>c.type==='group');
+  const positionC=constraints.filter(c=>c.type==='position');
   const getName=id=>players.find(p=>p.id===id)?.name??'Unknown';
 
   // Pair constraint form
-  const pairForm=ui.constraintMode==='pair'?`<div class="fr">
+  let pairForm='';
+  if(ui.constraintMode==='pair'){
+    pairForm=`<div class="fr">
     <div class="fg"><label class="fl">Player 1</label>
       <select class="fi fm" data-action="constraint-p1">
         <option value="">Select…</option>
@@ -1062,10 +1066,10 @@ function renderConstraints(){
     </div>
     <div class="fg"><label class="fl">Note (optional)</label><input class="fi" style="width:160px" id="c-note" value="${e(ui.constraintNote)}" placeholder="e.g. sharing a lift" oninput="STATE.ui.constraintNote=this.value"></div>
     <button class="btn bg" data-action="add-constraint" ${(!ui.constraintP1||!ui.constraintP2)?'disabled':''}>Add</button>
-  </div>`:
-  // Group constraint form (FIX 1)
-  `<div>
-    <div class="tsm tmu" style="margin-bottom:8px">Select 2–4 players who must play together as a group (e.g. a match play four-ball):</div>
+  </div>`;
+  } else if(ui.constraintMode==='group'){
+    pairForm=`<div>
+    <div class="tsm tmu" style="margin-bottom:8px">Select 2–4 players who must play together as a group:</div>
     <div class="player-check-grid">
       ${active.map(p=>{
         const sel=ui.constraintGroupSelected.includes(p.id);
@@ -1083,13 +1087,34 @@ function renderConstraints(){
     </div>
     ${ui.constraintGroupSelected.length>4?`<div style="color:var(--rd);font-size:.82rem;margin-top:4px">⚠️ Maximum 4 players per group</div>`:''}
   </div>`;
+  } else {
+    pairForm=`<div class="fr">
+    <div class="fg"><label class="fl">Player</label>
+      <select class="fi fm" data-action="constraint-pos-player">
+        <option value="">Select…</option>
+        ${active.map(p=>`<option value="${p.id}" ${ui.constraintPositionPlayer==p.id?'selected':''}>${e(p.name)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="fg"><label class="fl">Must play in</label>
+      <select class="fi" style="width:130px" data-action="constraint-pos-position">
+        <option value="first" ${ui.constraintPosition==='first'?'selected':''}>⏩ First group</option>
+        <option value="last" ${ui.constraintPosition==='last'?'selected':''}>⏭ Last group</option>
+      </select>
+    </div>
+    <div class="fg"><label class="fl">Note (optional)</label>
+      <input class="fi" style="width:160px" id="pos-note" value="${e(ui.constraintNote)}" placeholder="e.g. car to garage" oninput="STATE.ui.constraintNote=this.value">
+    </div>
+    <button class="btn bg" data-action="add-position-constraint" ${!ui.constraintPositionPlayer?'disabled':''}>Add</button>
+  </div>`;
+  }
 
   const togetherCards=together.map(c=>`<div class="cc cct"><div style="font-size:1.2rem">🤝</div><div style="flex:1"><div class="clb clbt">Pair — Must Play Together</div><div class="cnm">${e(getName(c.p1))} &amp; ${e(getName(c.p2))}</div>${c.note?`<div class="tsm tmu mt8">${e(c.note)}</div>`:''}</div><button class="btn bd bsm" data-action="remove-constraint" data-id="${c.id}">Remove</button></div>`).join('');
   const apartCards=apart.map(c=>`<div class="cc cca"><div style="font-size:1.2rem">🚫</div><div style="flex:1"><div class="clb clba">Pair — Must Not Play Together</div><div class="cnm">${e(getName(c.p1))} &amp; ${e(getName(c.p2))}</div>${c.note?`<div class="tsm tmu mt8">${e(c.note)}</div>`:''}</div><button class="btn bd bsm" data-action="remove-constraint" data-id="${c.id}">Remove</button></div>`).join('');
+  const positionCards=positionC.map(c=>`<div class="cc" style="background:#fff5ee;border-left:4px solid #b05a00"><div style="font-size:1.2rem">${c.position==='first'?'⏩':'⏭'}</div><div style="flex:1"><div class="clb" style="color:#b05a00;font-size:.68rem;letter-spacing:.4px;text-transform:uppercase;font-weight:600">${c.position==='first'?'First Group':'Last Group'}</div><div class="cnm">${e(getName(c.player))}</div>${c.note?`<div class="tsm tmu mt8">${e(c.note)}</div>`:''}</div><button class="btn bd bsm" data-action="remove-constraint" data-id="${c.id}">Remove</button></div>`).join('');
   const groupCards=group.map(c=>`<div class="cc ccd"><div style="font-size:1.2rem">🏌️</div><div style="flex:1"><div class="clb clbd">Group — Must Play Together (${c.members.length}-ball)</div><div class="cnm">${c.members.map(id=>e(getName(id))).join(' · ')}</div>${c.note?`<div class="tsm tmu mt8">${e(c.note)}</div>`:''}</div><button class="btn bd bsm" data-action="remove-constraint" data-id="${c.id}">Remove</button></div>`).join('');
 
   return page('Pairing Constraints',
-    `${together.length} pair together · ${apart.length} pair apart · ${group.length} group · ${active.length} players active`,
+    `${together.length} pair together · ${apart.length} pair apart · ${group.length} group · ${positionC.length} position · ${active.length} players active`,
     constraints.length>0?`<button class="btn bd bsm" data-action="clear-constraints">Clear All</button>`:'',
     `<div class="card">
       <div class="ct">Add Constraint</div>
@@ -1097,12 +1122,14 @@ function renderConstraints(){
         <button class="btn bsm ${ui.constraintMode==='pair'&&ui.constraintType==='together'?'bp':'bo'}" style="${ui.constraintMode==='pair'&&ui.constraintType==='together'?'background:var(--gm)':''}" data-action="cmode" data-mode="pair" data-type="together">🤝 Pair — Together</button>
         <button class="btn bsm" style="${ui.constraintMode==='pair'&&ui.constraintType==='apart'?'background:var(--rd);color:#fff;border:none':'background:none;border:1.5px solid var(--rd);color:var(--rd)'}" data-action="cmode" data-mode="pair" data-type="apart">🚫 Pair — Apart</button>
         <button class="btn bsm ${ui.constraintMode==='group'?'bp':'bo'}" style="${ui.constraintMode==='group'?'background:#5a4080;color:#fff;border:none':''}" data-action="cmode" data-mode="group" data-type="group">🏌️ Group (3–4 players)</button>
+        <button class="btn bsm ${ui.constraintMode==='position'?'bp':'bo'}" style="${ui.constraintMode==='position'?'background:#b05a00;color:#fff;border:none':''}" data-action="cmode" data-mode="position" data-type="position">🕐 First/Last Group</button>
       </div>
       ${pairForm}
     </div>
     ${together.length>0?`<div class="card"><div class="ct" style="color:var(--gm)">🤝 Must Play Together (Pairs)</div>${togetherCards}</div>`:''}
     ${apart.length>0?`<div class="card"><div class="ct" style="color:var(--rd)">🚫 Must Not Play Together (Pairs)</div>${apartCards}</div>`:''}
     ${group.length>0?`<div class="card"><div class="ct" style="color:#5a4080">🏌️ Must Play Together (Groups)</div>${groupCards}</div>`:''}
+    ${positionC.length>0?`<div class="card"><div class="ct" style="color:#b05a00">🕐 First/Last Group</div>${positionCards}</div>`:''}
     ${!constraints.length?`<div class="card"><div class="es"><div class="ei">🔗</div><div>No constraints set.</div><div class="tsm tmu mt8">Add pair or group constraints — they're respected when generating tee times.</div></div></div>`:''}`
   );
 }
@@ -1526,13 +1553,20 @@ document.addEventListener('click',ev=>{
   }
 
   // Constraints — FIX 1
-  if(act==='cmode'){setUI({constraintMode:btn.dataset.mode,constraintType:btn.dataset.type,constraintP1:'',constraintP2:'',constraintGroupSelected:[]});}
+  if(act==='cmode'){setUI({constraintMode:btn.dataset.mode,constraintType:btn.dataset.type,constraintP1:'',constraintP2:'',constraintGroupSelected:[],constraintPositionPlayer:'',constraintNote:''});}
   if(act==='add-constraint'){
     const p1=parseInt(ui.constraintP1),p2=parseInt(ui.constraintP2);if(!p1||!p2||p1===p2)return;
     const nc=document.getElementById('c-note')?.value.trim()||'';
     if(STATE.constraints.some(c=>c.type!=='group'&&((c.p1===p1&&c.p2===p2)||(c.p1===p2&&c.p2===p1)))){alert('Constraint already exists.');return;}
     saveAndSet('golf:constraints',[...STATE.constraints,{id:Date.now(),type:ui.constraintType,p1,p2,note:nc}],'constraints');
     setUI({constraintP1:'',constraintP2:'',constraintNote:''});
+  }
+  if(act==='add-position-constraint'){
+    const pid=parseInt(ui.constraintPositionPlayer);if(!pid)return;
+    const pos=ui.constraintPosition||'last';
+    const nc=document.getElementById('pos-note')?.value.trim()||ui.constraintNote||'';
+    saveAndSet('golf:constraints',[...STATE.constraints,{id:Date.now(),type:'position',player:pid,position:pos,note:nc}],'constraints');
+    setUI({constraintPositionPlayer:'',constraintNote:''});
   }
   if(act==='add-group-constraint'){
     const sel=ui.constraintGroupSelected;
@@ -1616,6 +1650,8 @@ document.addEventListener('change',ev=>{
   if(act==='fin-winners'){setUI({finSfWinners:parseInt(el.value)});}
   if(act==='competition-type'){const lbl2=competitions().find(c=>c.id===el.value)?.label||el.value;setUI({competitionType:el.value,teeCompetition:lbl2,selectedWinners:[],selectedWinningGroup:''});}
   if(act==='constraint-p1'){setUI({constraintP1:el.value});}
+  if(act==='constraint-pos-player'){setUI({constraintPositionPlayer:el.value});}
+  if(act==='constraint-pos-position'){setUI({constraintPosition:el.value});}
   if(act==='constraint-p2'){setUI({constraintP2:el.value});}
   // FIX 1: group player checkbox
   if(act==='group-select'){
@@ -1675,12 +1711,20 @@ function doAutoAssign(){
   const{players,constraints,ui}=STATE;
   const active=players.filter(p=>p.playGross||p.playNett||p.playNormal);
   const togetherC=constraints.filter(c=>c.type==='together');
-  const groupC=constraints.filter(c=>c.type==='group');   // FIX 1: honour group constraints
+  const groupC=constraints.filter(c=>c.type==='group');
   const apartC=constraints.filter(c=>c.type==='apart');
+  const positionC=constraints.filter(c=>c.type==='position');
   const sizes=buildGroupSizes(active.length,ui.tee3First);
   if(!sizes.length)return;
   const groups=sizes.map(s=>({slots:s,members:[]}));
   const placed=new Set();
+
+  // Place position constraints first — 'first' into groups[0], 'last' into groups[last]
+  positionC.forEach(c=>{
+    const p=active.find(q=>q.id===c.player);if(!p||placed.has(p.id))return;
+    const targetGroup=c.position==='first'?groups[0]:groups[groups.length-1];
+    if(targetGroup.members.length<targetGroup.slots){targetGroup.members.push(p);placed.add(p.id);}
+  });
 
   // Place group constraints first
   groupC.forEach(c=>{
@@ -1690,11 +1734,25 @@ function doAutoAssign(){
     if(g){mems.forEach(p=>{g.members.push(p);placed.add(p.id);});}
   });
   // Place pair constraints
+  // If one player is already placed (e.g. by a position constraint), put the other in the same group
   togetherC.forEach(c=>{
     const a=active.find(p=>p.id===c.p1),b=active.find(p=>p.id===c.p2);
-    if(!a||!b||placed.has(a.id)||placed.has(b.id))return;
-    const g=groups.find(g=>g.members.length+2<=g.slots);
-    if(g){g.members.push(a,b);placed.add(a.id);placed.add(b.id);}
+    if(!a||!b)return;
+    const aPlaced=placed.has(a.id),bPlaced=placed.has(b.id);
+    if(aPlaced&&bPlaced)return; // both already placed, nothing to do
+    if(aPlaced&&!bPlaced){
+      // a is already in a group — find which one and add b there if there's room
+      const g=groups.find(g=>g.members.some(m=>m.id===a.id)&&g.members.length<g.slots);
+      if(g){g.members.push(b);placed.add(b.id);}
+    } else if(bPlaced&&!aPlaced){
+      // b is already in a group — find which one and add a there if there's room
+      const g=groups.find(g=>g.members.some(m=>m.id===b.id)&&g.members.length<g.slots);
+      if(g){g.members.push(a);placed.add(a.id);}
+    } else {
+      // neither placed — find a group with 2 free slots
+      const g=groups.find(g=>g.members.length+2<=g.slots);
+      if(g){g.members.push(a,b);placed.add(a.id);placed.add(b.id);}
+    }
   });
   // Shuffle remaining
   active.filter(p=>!placed.has(p.id)).sort(()=>Math.random()-.5).forEach(player=>{
