@@ -211,6 +211,8 @@ let STATE={
     scoresView:'entry',scoresTab:'gross',
     importGameType:'gross',importPlayerId:'',importPaste:'',
     importPreview:null,importError:'',importDone:false,
+    importMode:'single', // 'single' | 'bulk'
+    bulkPaste:'',bulkPreview:null,bulkError:'',bulkDone:false,
     resultsCommitted:false,resultsConfirm:false,
     kittyBarBill:'',kittyManualOverride:'',kittyClearConfirm:false,
     kittyAddedConfirm:false,   // FIX 6: track whether Add to Kitty used
@@ -724,7 +726,7 @@ function renderQuickImport(){
   else if(gt==='nett'&&!hasNett){gt=hasGross?'gross':hasNormal?'normal':'nett';}
   else if(gt==='normal'&&!hasNormal){gt=hasGross?'gross':hasNett?'nett':'normal';}
   if(gt!==ui.importGameType)STATE.ui.importGameType=gt;
-  const playersForGame=gt==='gross'?players.filter(p=>p.playGross):gt==='nett'?players.filter(p=>p.playNett):players.filter(p=>p.playNormal);
+  const playersForGame=gt==='gross'?players.filter(p=>p.playGross):gt==='nett'?players.filter(p=>p.playNett):players.filter(p=>p.playNormal&&!p.playGross&&!p.playNett);
   const selP=players.find(p=>p.id===parseInt(ui.importPlayerId));
   let previewHtml='';
   if(ui.importPreview&&selP){
@@ -741,9 +743,17 @@ function renderQuickImport(){
         </tbody>
       </table></div></div>`;
   }
+  // ── Bulk paste mode ──
+  if(ui.importMode==='bulk'){
+    return renderBulkImport(gt,playersForGame);
+  }
+
   return`<div class="card" style="border-left:4px solid var(--go)">
-    <div class="ct">⚡ Quick Import — paste 18 scores for one player</div>
-    <div class="fr" style="margin-bottom:14px">
+    <div class="flex jbs aic" style="margin-bottom:4px">
+      <div class="ct" style="margin:0">⚡ Quick Import — paste 18 scores for one player</div>
+      <button class="btn bo bsm" data-action="import-mode" data-mode="bulk">📑 Bulk Paste (all players)</button>
+    </div>
+    <div class="fr" style="margin-bottom:14px;margin-top:10px">
       <div class="fg"><label class="fl">Game</label>
         <select class="fi" style="width:130px" data-action="import-gametype">
           ${players.some(p=>p.playGross)?`<option value="gross" ${gt==='gross'?'selected':''}>⛳ Gross</option>`:''}
@@ -752,10 +762,26 @@ function renderQuickImport(){
         </select>
       </div>
       <div class="fg"><label class="fl">Player <span class="tmu" style="font-weight:400">(${playersForGame.length} in this game)</span></label>
-        <select class="fi import-player-select" id="import-player" data-action="import-player">
-          <option value="">Select player…</option>
-          ${playersForGame.map(p=>`<option value="${p.id}" ${ui.importPlayerId==p.id?'selected':''}>${e(p.name)} — Hcp ${calcCourseHcp(p.hi)}</option>`).join('')}
-        </select>
+        ${(()=>{
+          // Determine which score store to check
+          const scoresForGame=gt==='gross'?grossScores:gt==='nett'?nettScores:normalScores;
+          // Check if a player has any scores entered (at least 1 non-empty hole)
+          const hasScores=p=>(scoresForGame[p.id]||[]).some(v=>v!==''&&v!=null);
+          // Split into needs entry and already done, sort each alpha
+          const needsEntry=playersForGame.filter(p=>!hasScores(p)).sort((a,b)=>a.name.localeCompare(b.name));
+          const done=playersForGame.filter(p=>hasScores(p)).sort((a,b)=>a.name.localeCompare(b.name));
+          const doneCount=done.length,needsCount=needsEntry.length;
+          return`<select class="fi import-player-select" id="import-player" data-action="import-player">
+            <option value="">Select player… (${needsCount} still needed · ${doneCount} done)</option>
+            ${needsCount>0?`<optgroup label="⬜ Scores still needed (${needsCount})">
+              ${needsEntry.map(p=>`<option value="${p.id}" ${ui.importPlayerId==p.id?'selected':''}>${e(p.name)} — Hcp ${calcCourseHcp(p.hi)}</option>`).join('')}
+            </optgroup>`:''}
+            ${doneCount>0?`<optgroup label="✅ Scores already entered (${doneCount})">
+              ${done.map(p=>`<option value="${p.id}" ${ui.importPlayerId==p.id?'selected':''}>${e(p.name)} — Hcp ${calcCourseHcp(p.hi)}</option>`).join('')}
+            </optgroup>`:''}
+          </select>
+          ${needsCount===0?`<div style="margin-top:6px;font-size:.75rem;color:var(--gm);font-weight:600">✅ All ${playersForGame.length} players have scores entered</div>`:''}`;
+        })()}
       </div>
     </div>
     ${playersForGame.length===0?`<div style="color:var(--rd);font-size:.82rem;margin-bottom:12px;padding:8px 12px;background:#fdf0ef;border-radius:8px">⚠️ No players assigned to ${gt} today.</div>`:''}
@@ -827,7 +853,29 @@ function renderScores(){
     if(ui.scoresTab==='gross') inner+=renderScoreGrid(gp,grossScores,'gross');
     else if(ui.scoresTab==='nett') inner+=renderScoreGrid(np,nettScores,'nett');
     else if(isTeamGame(ui.competitionType)&&STATE.teeGroups.length>0) inner+=renderTeamScoreGrid(mp,normalScores);
-    else inner+=renderScoreGrid(mp,normalScores,'normal');
+    else{
+      // Split Stableford players into two sections:
+      // Section 1: scores needed (only Stableford, no Gross/Nett) — needs manual entry
+      // Section 2: scores carried over (also in Gross or Nett) — auto-copied, shown read-only style
+      const needsEntry=mp.filter(p=>!p.playGross&&!p.playNett);
+      const carriedOver=mp.filter(p=>p.playGross||p.playNett);
+      if(needsEntry.length>0){
+        inner+=`<div style="background:#e8f4f0;border-left:4px solid var(--gm);border-radius:8px;padding:8px 14px;margin-bottom:10px;font-size:.78rem;color:var(--td)">
+          ✏️ <strong>Scores needed</strong> — these ${needsEntry.length} player${needsEntry.length!==1?'s':''} only play Stableford and need scores entered manually.
+        </div>`;
+        inner+=renderScoreGrid(needsEntry,normalScores,'normal');
+      } else {
+        inner+=`<div style="background:#e8f4f0;border-left:4px solid var(--gm);border-radius:8px;padding:8px 14px;margin-bottom:10px;font-size:.78rem;color:var(--td)">
+          ✅ <strong>All Stableford scores carried over</strong> — all players are also in Gross or Nett skins, no manual entry needed.
+        </div>`;
+      }
+      if(carriedOver.length>0){
+        inner+=`<div style="background:#fffbf0;border-left:4px solid var(--go);border-radius:8px;padding:8px 14px;margin-bottom:10px;font-size:.78rem;color:var(--td);margin-top:16px">
+          ⚡ <strong>Scores carried over</strong> — these ${carriedOver.length} player${carriedOver.length!==1?'s':''} are also in Gross or Nett skins, scores auto-copied.
+        </div>`;
+        inner+=renderScoreGrid(carriedOver,normalScores,'normal');
+      }
+    }
   }
   return page('Score Entry','Enter hole-by-hole scores for today\'s round',
     `<div class="flex gap8"><button class="btn ${ui.scoresView==='entry'?'bp':'bo'}" data-action="scores-view" data-view="entry">📝 Entry</button><button class="btn ${ui.scoresView==='import'?'bp':'bo'}" data-action="scores-view" data-view="import">📋 Import</button><button class="btn ${ui.scoresView==='live'?'bp':'bo'}" data-action="scores-view" data-view="live">⚡ Live</button><button class="btn bd bsm" data-action="clear-all-scores" title="Clear all scores from the previous round">🗑 New Round</button></div>`,
@@ -1493,11 +1541,16 @@ document.addEventListener('click',ev=>{
 
   if(act==='clear-all-scores'){
     if(!confirm('Clear ALL scores (Gross, Nett and Normal) for a new round?'))return;
-    const emptyScores=(pl)=>{const c={};pl.forEach(p=>{c[p.id]=Array(18).fill('');});return c;};
-    saveAndSet('golf:grossScores',emptyScores(players.filter(p=>p.playGross)),'grossScores');
-    saveAndSet('golf:nettScores',emptyScores(players.filter(p=>p.playNett)),'nettScores');
-    saveAndSet('golf:normalScores',emptyScores(players.filter(p=>p.playNormal)),'normalScores');
-    setUI({resultsCommitted:false,resultsConfirm:false,kittyAddedConfirm:false,finAdded:false,finKittyPending:false,kittyBarBill:'',selectedWinners:[],selectedWinningGroup:''});
+    // FIX: clear scores for EVERY player, not just those currently toggled on —
+    // otherwise stale scores from previous rounds reappear when a player is
+    // re-selected for a later round.
+    const emptyScores=()=>{const c={};players.forEach(p=>{c[p.id]=Array(18).fill('');});return c;};
+    saveAndSet('golf:grossScores',emptyScores(),'grossScores');
+    saveAndSet('golf:nettScores',emptyScores(),'nettScores');
+    saveAndSet('golf:normalScores',emptyScores(),'normalScores');
+    setUI({resultsCommitted:false,resultsConfirm:false,kittyAddedConfirm:false,finAdded:false,finKittyPending:false,kittyBarBill:'',selectedWinners:[],selectedWinningGroup:'',
+      importPaste:'',importPreview:null,importError:'',importDone:false,importPlayerId:'',
+      bulkPaste:'',bulkPreview:null,bulkError:'',bulkDone:false});
   }
   // Scores
   if(act==='scores-view'){setUI({scoresView:btn.dataset.view});}
@@ -1511,12 +1564,46 @@ document.addEventListener('click',ev=>{
     else saveAndSet('golf:normalScores',{...STATE.normalScores,...c},'normalScores');
   }
   if(act==='import-reset'){setUI({importPaste:'',importPreview:null,importError:'',importDone:false,importPlayerId:''});}
+  if(act==='import-mode'){setUI({importMode:btn.dataset.mode,bulkPaste:'',bulkPreview:null,bulkError:'',bulkDone:false,importPaste:'',importPreview:null,importError:'',importDone:false,importPlayerId:''});}
+  if(act==='bulk-reset'){setUI({bulkPaste:'',bulkPreview:null,bulkError:'',bulkDone:false});}
+  if(act==='bulk-preview'){handleBulkPaste(STATE.ui.bulkPaste);}
+  if(act==='do-bulk-import'){
+    const rows=ui.bulkPreview;if(!rows)return;
+    const gt=ui.importGameType;
+    let store=gt==='gross'?{...STATE.grossScores}:gt==='nett'?{...STATE.nettScores}:{...STATE.normalScores};
+    let normalStore={...STATE.normalScores};
+    rows.forEach(r=>{
+      if(r.error||!r.player||!r.scores)return;
+      const scores18=r.scores.map(String);
+      store[r.player.id]=scores18;
+      // Auto-copy to Stableford if applicable
+      if((gt==='gross'||gt==='nett')&&r.player.playNormal){
+        normalStore[r.player.id]=scores18;
+      }
+    });
+    if(gt==='gross'){
+      saveAndSet('golf:grossScores',store,'grossScores');
+      saveAndSet('golf:normalScores',normalStore,'normalScores');
+    } else if(gt==='nett'){
+      saveAndSet('golf:nettScores',store,'nettScores');
+      saveAndSet('golf:normalScores',normalStore,'normalScores');
+    } else {
+      saveAndSet('golf:normalScores',store,'normalScores');
+    }
+    setUI({bulkDone:true,bulkError:''});
+  }
   if(act==='do-import'){
     const prev=ui.importPreview;const pid=parseInt(ui.importPlayerId);if(!prev||!pid)return;
     const scores18=prev.map(String);
-    if(ui.importGameType==='gross')saveAndSet('golf:grossScores',{...STATE.grossScores,[pid]:scores18},'grossScores');
-    else if(ui.importGameType==='nett')saveAndSet('golf:nettScores',{...STATE.nettScores,[pid]:scores18},'nettScores');
-    else saveAndSet('golf:normalScores',{...STATE.normalScores,[pid]:scores18},'normalScores');
+    if(ui.importGameType==='gross'){
+      saveAndSet('golf:grossScores',{...STATE.grossScores,[pid]:scores18},'grossScores');
+      const ip=STATE.players.find(q=>q.id===pid);
+      if(ip&&ip.playNormal)saveAndSet('golf:normalScores',{...STATE.normalScores,[pid]:scores18},'normalScores');
+    } else if(ui.importGameType==='nett'){
+      saveAndSet('golf:nettScores',{...STATE.nettScores,[pid]:scores18},'nettScores');
+      const ip=STATE.players.find(q=>q.id===pid);
+      if(ip&&ip.playNormal)saveAndSet('golf:normalScores',{...STATE.normalScores,[pid]:scores18},'normalScores');
+    } else saveAndSet('golf:normalScores',{...STATE.normalScores,[pid]:scores18},'normalScores');
     setUI({importDone:true,importError:''});
   }
 
@@ -1627,15 +1714,41 @@ document.addEventListener('click',ev=>{
 });
 
 document.addEventListener('change',ev=>{
+  const elChg=ev.target;
+  if(elChg.id==='bulk-paste'){handleBulkPaste(elChg.value);return;}
   const el=ev.target;const act=el.dataset.action;
   if(act==='toggle'){const id=parseInt(el.dataset.id),field=el.dataset.field;saveAndSet('golf:players',STATE.players.map(p=>p.id===id?{...p,[field]:el.checked}:p),'players');}
   if(act==='score-input'){
     const pid=parseInt(el.dataset.pid),hole=parseInt(el.dataset.hole),type=el.dataset.type,val=el.value;
-    if(type==='gross'){const n={...STATE.grossScores,[pid]:[...(STATE.grossScores[pid]||Array(18).fill(''))]};n[pid][hole]=val;saveAndSet('golf:grossScores',n,'grossScores');}
-    else if(type==='nett'){const n={...STATE.nettScores,[pid]:[...(STATE.nettScores[pid]||Array(18).fill(''))]};n[pid][hole]=val;saveAndSet('golf:nettScores',n,'nettScores');}
-    else{const n={...STATE.normalScores,[pid]:[...(STATE.normalScores[pid]||Array(18).fill(''))]};n[pid][hole]=val;saveAndSet('golf:normalScores',n,'normalScores');}
+    if(type==='gross'){
+      const n={...STATE.grossScores,[pid]:[...(STATE.grossScores[pid]||Array(18).fill(''))]};
+      n[pid][hole]=val;
+      saveAndSet('golf:grossScores',n,'grossScores');
+      // Auto-copy to Stableford if this player also plays Normal
+      const p=STATE.players.find(q=>q.id===pid);
+      if(p&&p.playNormal){
+        const ns={...STATE.normalScores,[pid]:[...(STATE.normalScores[pid]||Array(18).fill(''))]};
+        ns[pid][hole]=val;
+        saveAndSet('golf:normalScores',ns,'normalScores');
+      }
+    } else if(type==='nett'){
+      const n={...STATE.nettScores,[pid]:[...(STATE.nettScores[pid]||Array(18).fill(''))]};
+      n[pid][hole]=val;
+      saveAndSet('golf:nettScores',n,'nettScores');
+      // Auto-copy to Stableford if this player also plays Normal
+      const p=STATE.players.find(q=>q.id===pid);
+      if(p&&p.playNormal){
+        const ns={...STATE.normalScores,[pid]:[...(STATE.normalScores[pid]||Array(18).fill(''))]};
+        ns[pid][hole]=val;
+        saveAndSet('golf:normalScores',ns,'normalScores');
+      }
+    } else {
+      const n={...STATE.normalScores,[pid]:[...(STATE.normalScores[pid]||Array(18).fill(''))]};
+      n[pid][hole]=val;
+      saveAndSet('golf:normalScores',n,'normalScores');
+    }
   }
-  if(act==='import-gametype'){setUI({importGameType:el.value,importPlayerId:'',importPaste:'',importPreview:null,importError:'',importDone:false});}
+  if(act==='import-gametype'){setUI({importGameType:el.value,importPlayerId:'',importPaste:'',importPreview:null,importError:'',importDone:false,bulkPaste:'',bulkPreview:null,bulkError:'',bulkDone:false});}
   if(act==='import-player'){setUI({importPlayerId:el.value,importPaste:'',importPreview:null,importError:'',importDone:false});}
   if(act==='tee-start'){setUI({teeStart:el.value});}
   if(act==='tee-competition'){const lbl=competitions().find(c=>c.id===el.value)?.label||el.value;setUI({competitionType:el.value,teeCompetition:lbl,selectedWinners:[],selectedWinningGroup:''});}
@@ -1674,6 +1787,7 @@ document.addEventListener('change',ev=>{
 document.addEventListener('input',ev=>{
   const el=ev.target;
   if(el.id==='import-paste'){handleImportPaste(el.value);}
+  if(el.id==='bulk-paste'){handleBulkPaste(el.value);} // paste fires once with full text — safe to parse + re-render
   if(el.id==='new-name'){setUI({playersNewName:el.value});}
   if(el.id==='new-hi'){setUI({playersNewHi:el.value});}
   if(el.id==='edit-name'){setUI({playersEditName:el.value});}
@@ -1684,6 +1798,69 @@ document.addEventListener('input',ev=>{
   if(el.id==='group-note'){setUI({constraintGroupNote:el.value});}
   if(el.id==='players-import-paste'){setUI({playersImportPaste:el.value});}
 });
+
+function handleBulkPaste(text){
+  const {players,ui}=STATE;
+  const gt=ui.importGameType;
+  const playersForGame=gt==='gross'?players.filter(p=>p.playGross):gt==='nett'?players.filter(p=>p.playNett):players.filter(p=>p.playNormal&&!p.playGross&&!p.playNett);
+  const sortedPlayers=[...playersForGame].sort((a,b)=>a.name.localeCompare(b.name));
+
+  if(!text.trim()){
+    setUI({bulkPaste:text,bulkPreview:null,bulkError:'',bulkDone:false});
+    return;
+  }
+
+  // Parse into a 2D grid of numbers — split rows by line, columns by whitespace/tab/comma
+  const rawLines=text.split(/\r\n|\r|\n/).map(l=>l.trim()).filter(l=>l.length>0);
+  const grid=rawLines.map(l=>l.split(/[\s,\t]+/).map(s=>parseInt(s.trim())).filter(n=>!isNaN(n)));
+
+  const numPlayers=sortedPlayers.length;
+  let rows=[];
+  let globalErr='';
+
+  // ── Auto-detect orientation ──
+  // Orientation A (rows-of-players): grid.length ≈ numPlayers, each row has 18 numbers
+  // Orientation B (columns-of-players): grid.length ≈ 18, each row has numPlayers numbers (transposed)
+  const looksLikeRows=grid.length>0&&grid.every(r=>r.length===18)&&grid.length<=numPlayers+2;
+  const looksLikeColumns=grid.length>0&&grid.every(r=>r.length===numPlayers)&&Math.abs(grid.length-18)<=2&&numPlayers!==18;
+
+  let dataGrid; // will hold [player][hole] = score, one sub-array per player
+  if(looksLikeColumns&&!looksLikeRows){
+    // Transpose: grid is [hole][player] → convert to [player][hole]
+    dataGrid=sortedPlayers.map((p,pi)=>grid.map(holeRow=>holeRow[pi]));
+    globalErr=`Detected column layout (players across, holes down) — auto-transposed.`;
+  } else {
+    // Assume rows-of-players (default)
+    dataGrid=grid;
+  }
+
+  if(dataGrid.length>numPlayers){
+    globalErr=(globalErr?globalErr+' ':'')+`${dataGrid.length} rows pasted but only ${numPlayers} players in this game — extra rows will be ignored.`;
+  } else if(dataGrid.length<numPlayers){
+    globalErr=(globalErr?globalErr+' ':'')+`${dataGrid.length} rows pasted but ${numPlayers} players in this game — missing rows will be skipped.`;
+  }
+
+  sortedPlayers.forEach((p,i)=>{
+    const nums=dataGrid[i];
+    if(!nums){
+      rows.push({player:p,scores:null,error:'No row pasted for this player'});
+      return;
+    }
+    if(nums.length!==18){
+      rows.push({player:p,scores:null,error:`Found ${nums.length} numbers — need 18`});
+      return;
+    }
+    const inv=nums.filter(n=>n<1||n>15);
+    if(inv.length>0){
+      rows.push({player:p,scores:nums,error:`Unusual score(s): ${inv.join(', ')} — check this row`});
+      return;
+    }
+    rows.push({player:p,scores:nums,error:null});
+  });
+
+  setUI({bulkPaste:text,bulkPreview:rows,bulkError:globalErr,bulkDone:false});
+}
+
 
 function handleImportPaste(text){
   const nums=text.trim().split(/[\s,\t\n]+/).map(s=>parseInt(s.trim())).filter(n=>!isNaN(n));
@@ -1699,6 +1876,77 @@ function handleImportPaste(text){
     }
   }
   setUI({importPaste:text,importPreview:preview,importError:err,importDone:false});
+}
+
+
+// ── Bulk Paste — paste all players' scores at once, one row per player (alphabetical) ──
+function renderBulkImport(gt,playersForGame){
+  const {ui}=STATE;
+  const sortedPlayers=[...playersForGame].sort((a,b)=>a.name.localeCompare(b.name));
+  const gameLabel=gt==='gross'?'⛳ Gross':gt==='nett'?'🏌️ Nett':'🏅 Stableford';
+
+  let previewHtml='';
+  if(ui.bulkPreview){
+    const rows=ui.bulkPreview;
+    previewHtml=`<div style="margin-bottom:14px">
+      <div class="tsm tmu" style="margin-bottom:8px">Preview — check each row matches the right player</div>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:.78rem">
+        <thead><tr style="background:var(--gd);color:var(--cr)">
+          <td style="padding:6px 8px;font-weight:600">Row</td>
+          <td style="padding:6px 8px;font-weight:600">Player</td>
+          ${HOLES.map(h=>`<td style="text-align:center;padding:4px 3px">${h}</td>`).join('')}
+          <td style="text-align:center;padding:6px 8px">Total</td>
+        </tr></thead>
+        <tbody>
+          ${rows.map((r,i)=>`<tr style="${r.error?'background:#fdf0ef':'background:var(--gp)'}">
+            <td style="padding:5px 8px;font-weight:600">${i+1}</td>
+            <td style="padding:5px 8px;font-weight:600">${r.player?e(r.player.name):'<span style="color:var(--rd)">— no player —</span>'}</td>
+            ${r.scores?r.scores.map(s=>`<td style="text-align:center;padding:4px 2px">${s}</td>`).join(''):`<td colspan="18" style="text-align:center;color:var(--rd);padding:4px">${e(r.error||'')}</td>`}
+            <td style="text-align:center;font-weight:700;color:var(--gd)">${r.scores?r.scores.reduce((a,b)=>a+b,0):'—'}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table></div>
+    </div>`;
+  }
+
+  const hasErrors=ui.bulkPreview?.some(r=>r.error);
+  const validRows=ui.bulkPreview?.filter(r=>!r.error&&r.player).length||0;
+
+  return`<div class="card" style="border-left:4px solid var(--go)">
+    <div class="flex jbs aic" style="margin-bottom:4px">
+      <div class="ct" style="margin:0">📑 Bulk Paste — ${gameLabel} scores for all players at once</div>
+      <button class="btn bo bsm" data-action="import-mode" data-mode="single">⚡ Single Player</button>
+    </div>
+    <div class="fg" style="margin:10px 0 14px">
+      <label class="fl">Game</label>
+      <select class="fi" style="width:130px" data-action="import-gametype">
+        ${STATE.players.some(p=>p.playGross)?`<option value="gross" ${gt==='gross'?'selected':''}>⛳ Gross</option>`:''}
+        ${STATE.players.some(p=>p.playNett)?`<option value="nett" ${gt==='nett'?'selected':''}>🏌️ Nett</option>`:''}
+        ${STATE.players.some(p=>p.playNormal)?`<option value="normal" ${gt==='normal'?'selected':''}>🏅 Stableford</option>`:''}
+      </select>
+    </div>
+    ${gt==='normal'?`<div style="background:#e8f4f0;border-left:4px solid var(--gm);border-radius:8px;padding:8px 14px;margin-bottom:10px;font-size:.78rem;color:var(--td)">
+      ⚡ Players also in Gross or Nett are excluded here — their Stableford scores are copied automatically.
+    </div>`:''}
+    <div style="background:var(--gp);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:.8rem">
+      <div style="font-weight:600;margin-bottom:6px">Player order (alphabetical) — paste one row per player, in this order:</div>
+      <ol style="margin:0;padding-left:20px;columns:2;column-gap:20px">
+        ${sortedPlayers.map(p=>`<li>${e(p.name)}</li>`).join('')}
+      </ol>
+    </div>
+    <div class="fg" style="margin-bottom:14px">
+      <label class="fl">Paste all scores here — one row per player (${sortedPlayers.length} players, 18 numbers each)</label>
+      <textarea class="fi" id="bulk-paste" style="min-height:${Math.min(300,sortedPlayers.length*24+40)}px;font-family:monospace;font-size:.8rem" placeholder="5 4 5 4 4 4 4 3 5 4 4 3 5 3 4 4 3 4&#10;6 3 6 5 4 4 4 3 5 4 3 3 4 3 4 4 3 3&#10;...">${e(ui.bulkPaste)}</textarea>
+      ${ui.bulkPaste&&!ui.bulkPreview?`<button class="btn bo bsm mt8" data-action="bulk-preview">👁 Preview</button>`:''}
+    </div>
+    ${ui.bulkError?`<div style="color:var(--rd);font-size:.82rem;margin-bottom:12px;padding:8px 12px;background:#fdf0ef;border-radius:8px">⚠️ ${e(ui.bulkError)}</div>`:''}
+    ${previewHtml}
+    <div class="flex gap8 aic">
+      ${ui.bulkDone?`<span style="color:var(--gm);font-weight:600">✅ Imported ${validRows} player${validRows!==1?'s':''}!</span><button class="btn bo bsm" data-action="bulk-reset">Paste more</button>`
+        :`<button class="btn bg" data-action="do-bulk-import" ${(!ui.bulkPreview||hasErrors||validRows===0)?'disabled':''}>✅ Import ${validRows>0?`${validRows} player${validRows!==1?'s':''}`:'scores'}</button>`}
+      ${ui.bulkPaste&&!ui.bulkDone?`<button class="btn bd bsm" data-action="bulk-reset">Clear</button>`:''}
+    </div>
+  </div>`;
 }
 
 function reorderTeeGroups(threeBallsFirst){
